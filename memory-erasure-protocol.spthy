@@ -33,7 +33,7 @@ rule Corrupt:
     // prover as a "voice"
 rule Corrupt_Fast:
   [ !CorruptAgent($A), In(msg) ]
---[ CorruptFastMsg($A) ]->
+--[ CorruptFastMsg($A, msg) ]->
   [ FastMsg(msg) ]
 
 // -------------------- Protocol Rules -------------------- //
@@ -83,7 +83,7 @@ rule Prover_3:
 
 rule Verifier_3:
   [ FastMsg(h(<key, n, m, c>)), !SharedKey($P, $V, key), VerifierFastPhaseChallenge($P, $V, n, m, c) ]
---[ EndFastPhase($P, $V, n, m, c), VerifierComplete($P, $V, n, m, c) ]->
+--[ EndFastPhase($P, $V, n, m, c), VerifierComplete($P, $V, h(<key, n, m, c>)) ]->
   []
 
 // ------------------- Axioms -------------------------- //
@@ -148,8 +148,8 @@ lemma prover3_exists:
 lemma finish_exists:
     exists-trace
   "
-   ( Ex P V m n c #t. (
-        VerifierComplete(P, V, m, n, c)@t )
+   ( Ex P V key m n c #t. (
+        VerifierComplete(P, V, h(<key, n, m, c>))@t )
    ) &
 	not( Ex A #t1. Corrupt(A)@t1 )
   "
@@ -158,26 +158,26 @@ lemma finish_exists:
 
 lemma secMemErasure:
   "
-  All P V n m c #t. (
-    VerifierComplete(P, V, n, m, c)@t ) ==>                   // Whenever the verifier is complete EITHER:
-    (Ex #tc. Corrupt(V)@tc)|                                  //  1) The verifier is corrupt OR
-    (                                                         
-      Ex #t1 #t2 #t3. VerifierStartFastPhase(P, V, n, m, c)@t1 &              //  2) There exists t1, t2 and t3 such that
-                  ProverReplyFastPhase(P, V, n, m, c)@t2 &                              //          The fast phase was between t1 and t3
-                  EndFastPhase(P, V, n, m, c)@t3 &            //          and the prover did something between those two times
-                  (#t1 < #t2) &                               //          and the verifier completed at or after the
-                  (#t2 < #t3) &                               //          end of the fast phase OR
-                  ( (#t3 < #t ) | (#t3 = #t) )
+  All P V key n m c #t. (
+    VerifierComplete(P, V, h(<key, n, m, c>))@t ) ==>         		// Whenever the verifier is complete EITHER:
+    (Ex #tc. Corrupt(V)@tc)|                                  		//  1) The verifier is corrupt OR
+    (                                                         	
+      Ex #t1 #t2 #t3. VerifierStartFastPhase(P, V, n, m, c)@t1 &	//  2) There exists t1, t2 and t3 such that the verifier sent challenge c at time t1
+                  ProverReplyFastPhase(P, V, n, m, c)@t2 &              //	The prover replied with h(<key, n, m, c>) at time t2 The fast phase was between t1 and t3
+                  EndFastPhase(P, V, n, m, c)@t3 &			//	the verifier received h(<key, n, m, c>) at time t3 
+                  (#t1 < #t2) &						//	the verifier's challenge came before the prover's response
+                  (#t2 < #t3) &						//	the verifier finished the fast phase after the prover's response
+                  (#t3 = #t)						//	the end of the fast phase coincided with the claim event.
     )|
     (              
-      Ex CAgent #t4 #t5 #t6 #t7. VerifierStartFastPhase(P, V, n, m, c)@t5 &    //  3) There exist times t5, t6 and t7 such that
-                             EndFastPhase(P, V, n, m, c)@t7 & //        The fast phase was between t5 and t7
-                             Corrupt(P)@t4 &             //        and the prover P is dishonest
-                             (#t4 < #t7)&                     //        the fast phase
-                             CorruptFastMsg(CAgent)@t6 &             //        and some dishonest agent did something during
-                             (#t5 < #t6)&                     //        the fast phase
-                             (#t6 < #t7)&                     //        and the verifier completed at or after the
-                             ( (#t7 < #t) | (#t7 = #t) )      //        end of the fast phase 
+      Ex CAgent #t4 #t5 #t6 #t7. VerifierStartFastPhase(P, V, n, m, c)@t5 &	//  3) There exist times t5, t6 and t7 such that
+                             EndFastPhase(P, V, n, m, c)@t7 &			//        The fast phase was between t5 and t7
+                             Corrupt(P)@t4 &					//        and the prover P became dishonest
+                             (#t4 < #t7)&					//        prior the fast phase
+                             CorruptFastMsg(CAgent, h(<key, n, m, c>))@t6 &	//        and some dishonest agent CAgent sent the correct response h(<key, n, m, c>) on behalf of P
+                             (#t5 < #t6)&					//        CAgent is within the correct bound 
+                             (#t6 < #t7)&					//        and the verifier completed at or after the
+                             (#t7 = #t)			//        end of the fast phase 
     ) 
   "
 
