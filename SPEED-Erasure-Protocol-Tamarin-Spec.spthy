@@ -1,7 +1,7 @@
 /* Implementation of the SPEED protocol */
 /* Demonstrating the memory erasure property */
 
-theory memoryErasure
+theory SpeedMemoryErasure
 
 begin
 
@@ -23,8 +23,8 @@ rule Register_Keypair:
 
 rule Corrupt:
   [ !SharedKey($P, $V, key) ]
---[ Corrupted($P, $V), Prelim(), Corrupt($P) ]-> //Here we mark the corrupt key by the fact Corrupted and the corrupt agent by the fact Corrupt
-  [ Out(key), !CorruptAgent($P) ]
+--[ Corrupted($P, $V), Prelim(), Corrupt($P) ]-> //To model the fact that SPEED does not allow corruption of agents, we do not reveal the key.
+  [ !CorruptAgent($P) ]
 
 
     // The adversary can only interact with the network using the In() and Out() facts:
@@ -60,7 +60,7 @@ rule Prover_1:
   // the verifier replies with the hash of the nonces
 
 rule Verifier_2:
-  let fastmsg = h(<n, m>) in
+  let fastmsg = <n, m> in
   [ FastMsg(<m, $V>), VerifierFirstMsg($V, n) ]
 --[ VerifierReplyFastPhase($P, $V, n, m)]->
   [ FastMsg(fastmsg), Out(fastmsg), VerifierSecondMsg($P, $V, n, m) ]
@@ -70,8 +70,8 @@ rule Verifier_2:
 
 rule Prover_2:
   let finalResp = mac(<mac(n,m),'MeM'>) in
-  [ FastMsg(h(<n, m>)), ProverFastPhaseChallenge($P, $V, n, m) ]
---[ EndFastPhase($P, $V, n, m), ProverComplete(finalResp) ]->
+  [ FastMsg(<n, m>), ProverFastPhaseChallenge($P, $V, n, m) ]
+--[ EndFastPhase($P, $V, n, m), ProverComplete($P, $V, finalResp) ]->
   [ Out(finalResp)]
 
   // The verifier finishes the protocol once the correct mac value is received. 
@@ -79,7 +79,7 @@ rule Prover_2:
   rule Verifier_3:
   let finalResp = mac(<mac(n,m),'MeM'>) in
   [ In(finalResp), VerifierSecondMsg($P, $V, n, m)]
---[ VerifierComplete(finalResp) ]->
+--[ VerifierComplete($P, $V, finalResp) ]->
   []
 
 // ------------------- Axioms -------------------------- //
@@ -118,7 +118,7 @@ lemma prover2_exists:
     exists-trace
   "
     Ex P V n m #t. (
-        ProverComplete(P, V, n, m)@t )
+        ProverComplete(P, V, mac(<mac(n,m),'MeM'>))@t )
 
   "
 
@@ -126,7 +126,7 @@ lemma verifier3_exists:
     exists-trace
   "
     Ex P V n m #t. (
-        VerifierComplete(P, V, n, m, 'MeM')@t )
+        VerifierComplete(P, V, mac(<mac(n,m),'MeM'>))@t )
 
   "
 
@@ -136,12 +136,14 @@ lemma verifier3_exists:
 lemma secMemErasure:
   "
   All P V n m #t. (
-    VerifierComplete(mac(<mac(n,m),'MeM'>))@t ) ==>         		// Whenever the verifier is complete EITHER:
+    VerifierComplete(P, V, mac(<mac(n,m),'MeM'>))@t ) ==>         		// Whenever the verifier is complete EITHER:
     (Ex #tc. Corrupt(V)@tc)|                                  		//  1) The verifier is corrupt OR
     (Ex #tc. Corrupt(P)@tc)|                                  		//  1) The prover is corrupt OR
     (                                                         	
-      Ex #t1 ProverComplete(mac(<mac(n,m),'MeM'>))@t1 &	//  2) There exists t1 such that the prover send the corect mac value 
+      Ex #t1. ProverComplete(P, V, mac(<mac(n,m),'MeM'>))@t1 &	//  2) There exists t1 such that the prover send the corect mac value 
                   (#t1 < #t)						//	the send even is before the claim event
-    )  
+    )
   "
+
+end
 
