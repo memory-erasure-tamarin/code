@@ -1,0 +1,147 @@
+/* Implementation of the SPEED protocol */
+/* Demonstrating the memory erasure property */
+
+theory memoryErasure
+
+begin
+
+functions: h/1, mac/1
+
+// -------------------- Initialization -------------------- //
+
+    // Rule for registering a prover/verifier. We create "agent" facts
+    // Because the verifier doesn't necessarily know his communication partner
+    // When he sends his first message (but we want to track V's session)
+rule Register_Keypair:
+  [ Fr(~key) ]
+--[ KeyGen($P, $V, ~key) ,Once($P, $V), Prelim()]-> // The fact Once is used to enforce (via an axiom) a single key between each pair of agents
+													// The fact prelim is used to enforce (via an axiom) that key generation is executed always at the beginning 
+  [ !SharedKey($P, $V, ~key), !Agent($P), !Agent($V) ]	//The persistent fact Agent allows us to use agents with shared keys
+
+// -------------------- Corrupted Agent Rules ---------------- //
+
+
+rule Corrupt:
+  [ !SharedKey($P, $V, key) ]
+--[ Corrupted($P, $V), Prelim(), Corrupt($P) ]-> //Here we mark the corrupt key by the fact Corrupted and the corrupt agent by the fact Corrupt
+  [ Out(key), !CorruptAgent($P) ]
+
+
+    // The adversary can only interact with the network using the In() and Out() facts:
+    // The FastMsg fact is used for messages sent during the fast phase.
+    // If the adversary wants to send a message in the fast phase, they have to use a corrupted
+    // prover as a "voice"
+rule Corrupt_Fast:
+  [ !CorruptAgent($A), In(msg) ]
+--[ CorruptFastMsg($A, msg) ]->
+  [ FastMsg(msg) ]
+
+// Note that, SPEED makes no use of cryptographic keys. Hence the rules above aren't actually needed.
+  
+// -------------------- Protocol Rules -------------------- //
+
+  // The Verifier V sends the hash of the nonce n, as well as their own name
+
+rule Verifier_1:
+  [ Fr(~n)]
+--[ VerifierStart($V, ~n) ]->
+  [ Out(<h(~n), $V>), VerifierFirstMsg($V, ~n) ]
+
+  // The prover receives a message from V
+  // He replies by sending a fast phase challenge m of his own. 
+
+rule Prover_1:
+  [ Fr(~m), In(<h(n), $V>)]
+--[ ProverStartFastPhase($P, $V, n, ~m)]->
+  [ FastMsg(<~m, $V>), ProverFastPhaseChallenge($P, $V, n, ~m)]
+
+
+  // The verifier receives the prover's challenge
+  // the verifier replies with the hash of the nonces
+
+rule Verifier_2:
+  let fastmsg = h(<n, m>) in
+  [ FastMsg(<m, $V>), VerifierFirstMsg($V, n) ]
+--[ VerifierReplyFastPhase($P, $V, n, m)]->
+  [ FastMsg(fastmsg), Out(fastmsg), VerifierSecondMsg($P, $V, n, m) ]
+
+
+  // The prover ends the fast phase and checks everything lines up
+
+rule Prover_2:
+  let finalResp = mac(<mac(n,m),'MeM'>) in
+  [ FastMsg(h(<n, m>)), ProverFastPhaseChallenge($P, $V, n, m) ]
+--[ EndFastPhase($P, $V, n, m), ProverComplete(finalResp) ]->
+  [ Out(finalResp)]
+
+  // The verifier finishes the protocol once the correct mac value is received. 
+  
+  rule Verifier_3:
+  let finalResp = mac(<mac(n,m),'MeM'>) in
+  [ In(finalResp), VerifierSecondMsg($P, $V, n, m)]
+--[ VerifierComplete(finalResp) ]->
+  []
+
+// ------------------- Axioms -------------------------- //
+
+  
+
+// -------------------- Sanity Check Lemmas -------------------- //
+
+  // These lemmas check that certain points in the trace are reachable.
+  // They're useful to check that the protocol has been correctly implemented
+  // but are not necessary for the analysis
+
+lemma verifier1_exists:
+    exists-trace
+  "
+    Ex V n #t. (
+        VerifierStart( V, n )@t )
+  "
+
+lemma prover1_exists:
+    exists-trace
+  "
+    Ex P V n m #t. (
+        ProverStartFastPhase(P, V, n, m)@t )
+
+  "
+
+lemma verifier2_exists:
+    exists-trace
+  "
+    Ex P V n m #t. (
+	VerifierReplyFastPhase(P, V, n, m)@t )
+  "
+
+lemma prover2_exists:
+    exists-trace
+  "
+    Ex P V n m #t. (
+        ProverComplete(P, V, n, m)@t )
+
+  "
+
+lemma verifier3_exists:
+    exists-trace
+  "
+    Ex P V n m #t. (
+        VerifierComplete(P, V, n, m, 'MeM')@t )
+
+  "
+
+
+// -------------------- Security Lemmas -------------------- //
+
+lemma secMemErasure:
+  "
+  All P V n m #t. (
+    VerifierComplete(mac(<mac(n,m),'MeM'>))@t ) ==>         		// Whenever the verifier is complete EITHER:
+    (Ex #tc. Corrupt(V)@tc)|                                  		//  1) The verifier is corrupt OR
+    (Ex #tc. Corrupt(P)@tc)|                                  		//  1) The prover is corrupt OR
+    (                                                         	
+      Ex #t1 ProverComplete(mac(<mac(n,m),'MeM'>))@t1 &	//  2) There exists t1 such that the prover send the corect mac value 
+                  (#t1 < #t)						//	the send even is before the claim event
+    )  
+  "
+

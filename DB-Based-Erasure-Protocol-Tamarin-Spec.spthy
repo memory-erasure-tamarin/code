@@ -1,0 +1,201 @@
+/* Implementation of the Secure Memory Erasure Protocol */
+/* Demonstrating the memory erasure property */
+
+theory memoryErasure
+
+begin
+
+functions: h/1, mac/1
+
+// -------------------- Initialization -------------------- //
+
+    // Rule for registering a prover/verifier. We create "agent" facts
+    // Because the verifier doesn't necessarily know his communication partner
+    // When he sends his first message (but we want to track V's session)
+rule Register_Keypair:
+  [ Fr(~key) ]
+--[ KeyGen($P, $V, ~key) ,Once($P, $V), Prelim()]-> // The fact Once is used to enforce (via an axiom) a single key between each pair of agents
+													// The fact prelim is used to enforce (via an axiom) that key generation is executed always at the beginning 
+  [ !SharedKey($P, $V, ~key), !Agent($P), !Agent($V) ]	//The persistent fact Agent allows us to use agents with shared keys
+
+// -------------------- Corrupted Agent Rules ---------------- //
+
+
+rule Corrupt:
+  [ !SharedKey($P, $V, key) ]
+--[ Corrupted($P, $V), Prelim(), Corrupt($P) ]-> //Here we mark the corrupt key by the fact Corrupted and the corrupt agent by the fact Corrupt
+  [ Out(key), !CorruptAgent($P) ]
+
+
+    // The adversary can only interact with the network using the In() and Out() facts:
+    // The FastMsg fact is used for messages sent during the fast phase.
+    // If the adversary wants to send a message in the fast phase, they have to use a corrupted
+    // prover as a "voice"
+rule Corrupt_Fast:
+  [ !CorruptAgent($A), In(msg) ]
+--[ CorruptFastMsg($A, msg) ]->
+  [ FastMsg(msg) ]
+
+// -------------------- Protocol Rules -------------------- //
+
+  // The Prover P sends the nonce n, as well as their own name
+
+rule Prover_1:
+  [ Fr(~n), !Agent($P) ]
+--[ ProverStart($P, ~n) ]->
+  [ Out(<~n, $P>), ProverFirstMsg($P, ~n) ]
+
+  // The verifier receives a message from P, with whom he has a shared key
+  // He replies by sending a nonce m of his own and a MAC on the two nonces. 
+
+rule Verifier_1:
+  [ Fr(~m), In(<n, $P>), !SharedKey($P, $V, key) ]
+--[ VerifierStart($P, $V, n, ~m)]->
+  [ Out(<mac(<key, n, ~m>), ~m, $V>), VerifierFirstMsg($P, $V, n, ~m)]
+
+
+  // The prover receives the verifier's nonce and MAC. If the MAC is correct, 
+  // the prover prepares for the fast phase
+
+rule Prover_2:
+  [ In(<mac(<key, n, m>), m, $V>), !SharedKey($P, $V, key), ProverFirstMsg($P, n) ]
+--[ ProverAuthVerif($P, $V, n, m)]->
+  [ ProverReadyFastPhase($P, $V, n, m)]
+
+  // The verifier sends a fresh challenge and signals the start of the fast phase
+
+rule Verifier_2:
+  [ Fr(~c), !SharedKey($P, $V, key), VerifierFirstMsg($P, $V, n, m)]
+--[ VerifierStartFastPhase($P, $V, n, m, ~c)]->
+  [ FastMsg(~c), Out(~c), VerifierFastPhaseChallenge($P, $V, n, m, ~c) ]
+
+
+  // The prover responds by sending a hash of all the nonces sent so far
+  // as well as the shared key between them and V
+
+rule Prover_3:
+  let fastmsg = h(<key, n, m, c>) in
+  [ FastMsg(c), ProverReadyFastPhase($P, $V, n, m), !SharedKey($P, $V, key) ]
+--[ ProverReplyFastPhase($P, $V, n, m, c)]->
+  [ FastMsg(fastmsg), Out(fastmsg) ]
+
+  // The verifier ends the fast phase and checks everything lines up
+
+rule Verifier_3:
+  [ FastMsg(h(<key, n, m, c>)), !SharedKey($P, $V, key), VerifierFastPhaseChallenge($P, $V, n, m, c) ]
+--[ EndFastPhase($P, $V, n, m, c), VerifierComplete($P, $V, h(<key, n, m, c>)) ]->
+  []
+
+// ------------------- Axioms -------------------------- //
+
+  // A given pair of agents can only have keypair between them
+
+axiom at_most_once:
+    "
+    All A V #t1 #t2. Once(A, V)@t1 & Once(A, V)@t2 ==>
+        (
+        #t1 = #t2
+        )
+    
+    
+    "
+
+
+// -------------------- Sanity Check Lemmas -------------------- //
+
+  // These lemmas check that certain points in the trace are reachable.
+  // They're useful to check that the protocol has been correctly implemented
+  // but are not necessary for the analysis
+
+lemma prover1_exists:
+    exists-trace
+  "
+    Ex P n #t. (
+        ProverStart( P, n )@t )
+  "
+
+lemma verifier1_exists:
+    exists-trace
+  "
+    Ex P V n m #t. (
+        VerifierStart(P, V, n, m)@t )
+
+  "
+
+lemma prover2_exists:
+    exists-trace
+  "
+    Ex P V n m #t. (
+	ProverAuthVerif(P, V, n, m)@t )
+  "
+
+lemma verif2_exists:
+    exists-trace
+  "
+    Ex P V n m c #t. (
+        VerifierStartFastPhase(P, V, n, m, c)@t )
+
+  "
+
+lemma prover3_exists:
+    exists-trace
+  "
+    Ex P V n m c #t. (
+        ProverReplyFastPhase(P, V, n, m, c)@t )
+
+  "
+
+lemma finish_exists:
+    exists-trace
+  "
+   ( Ex P V key m n c #t. (
+        VerifierComplete(P, V, h(<key, n, m, c>))@t )
+   ) &
+	not( Ex A #t1. Corrupt(A)@t1 )
+  "
+
+// -------------------- Security Lemmas -------------------- //
+
+lemma secMemErasure:
+  "
+  All P V key n m c #t. (
+    VerifierComplete(P, V, h(<key, n, m, c>))@t ) ==>         		// Whenever the verifier is complete EITHER:
+    (Ex #tc. Corrupt(V)@tc)|                                  		//  1) The verifier is corrupt OR
+    (                                                         	
+      Ex #t1 #t2 #t3. VerifierStartFastPhase(P, V, n, m, c)@t1 &	//  2) There exists t1, t2 and t3 such that the verifier sent challenge c at time t1
+                  ProverReplyFastPhase(P, V, n, m, c)@t2 &              //	The prover replied with h(<key, n, m, c>) at time t2 The fast phase was between t1 and t3
+                  EndFastPhase(P, V, n, m, c)@t3 &			//	the verifier received h(<key, n, m, c>) at time t3 
+                  (#t1 < #t2) &						//	the verifier's challenge came before the prover's response
+                  (#t2 < #t3) &						//	the verifier finished the fast phase after the prover's response
+                  (#t3 = #t)						//	the end of the fast phase coincided with the claim event.
+    )|
+    (              
+      Ex CAgent #t4 #t5 #t6 #t7. VerifierStartFastPhase(P, V, n, m, c)@t5 &	//  3) There exist times t5, t6 and t7 such that
+                             EndFastPhase(P, V, n, m, c)@t7 &			//        The fast phase was between t5 and t7
+                             Corrupt(P)@t4 &					//        and the prover P became dishonest
+                             (#t4 < #t7)&					//        prior the fast phase
+                             CorruptFastMsg(CAgent, h(<key, n, m, c>))@t6 &	//        and some dishonest agent CAgent sent the correct response h(<key, n, m, c>) on behalf of P
+                             (#t5 < #t6)&					//        CAgent is within the correct bound 
+                             (#t6 < #t7)&					//        and the verifier completed at or after the
+                             (#t7 = #t)			//        end of the fast phase 
+    ) 
+  "
+
+
+
+lemma Client_auth:
+  " /* For all session with a verifier */
+    ( All P V n m #i.  ProverAuthVerif(P, V, n, m) @ #i
+       ==>
+         /* there is a verifier that answered the request */
+       ( 
+		(Ex #a. VerifierStart(P, V, n, m) @ a)
+		 /* or the adversary performed a long-term key reveal on 'V' or 'P'
+		    before the key was setup. */
+		| (Ex #r. Corrupt(V) @ r & r < i)
+		| (Ex #r. Corrupt(P) @ r & r < i) 
+       )
+    )
+  "
+
+end
